@@ -141,7 +141,7 @@ def get_neg_energ(labels,phi_ij,phi_trans):
    
 
 class CRFTrainer():
-    def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features):
+    def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, sigma):
         self.Xs = Xs
         self.ys_labels = ys_labels
         self.Xs_test = Xs_test
@@ -150,6 +150,7 @@ class CRFTrainer():
         self.n_features = n_features
         self.n_fweights = self.n_labels*self.n_features
         self.n_tweights = self.n_labels*self.n_labels
+        self.sigma_square = sigma**2 if sigma else None
         
     def crf_log_lik(self, d, train_imgs, train_words):
         """
@@ -210,25 +211,30 @@ class CRFTrainer():
                         else:
                             tderivatives[c][cn] += 0 - P
         
-        #return the negative, because we are MINIMIZING
-        derivatives *= -1./float(len(train_imgs))
+        derivatives *= 1./float(len(train_imgs))
         
         #L2 regularization of derivatives
-        sigma = 10
-        derivatives += -1.0 * d / (2. * sigma * sigma)
+        derivatives += self.l2_regularization_der(d)
                 
         logprob = logprob / float(len(train_imgs))
         
-        #L2 regularization
-        sigma = 10
-        reg = np.square(d)
-        reg /= 2. * sigma * sigma
-        logprob += -1.0 * reg.sum()
-        
-        print "logprob %f" % -logprob
+        logprob += self.l2_regularization(d)
     
-        #return the negative, because we are MINIMIZING
-        return (-logprob, derivatives) 
+        #return the negative loglik and derivatives, because we are MINIMIZING
+        return (-logprob, -derivatives) 
+    
+    def l2_regularization(self,d):
+        if not self.sigma_square:
+            return 0
+        reg = np.square(d).sum()
+        reg /= 2. * self.sigma_square
+        return -1.0 * reg
+    
+    def l2_regularization_der(self,d):
+        if not self.sigma_square:
+            return np.zeros(len(d))
+        reg = -1.0 * d / (self.sigma_square)
+        return reg
         
     def train(self):
         res = minimize(self.crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True}, callback=self.test_accuracy)
@@ -302,7 +308,7 @@ class LinearCRF(BaseEstimator):
 
         n_labels = len(self.label_names)
         
-        trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features)
+        trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, sigma)
         
         trainer.train()
         

@@ -132,91 +132,11 @@ def process_test_word_mp(img,txt,fweights,tweights):
     
     return pword, beta
 
-def crf_log_lik(d, train_imgs, train_words):
-    """
-    lok-likelihood with respect to all model parameters W^T and W^F
-    
-    The derivates:
-    dL/dWccn = 1/N sum_N (sum_{j=1}^{L} [y_{ij} = c][y_{ij+1} = c] - P_{W}(y_{ij} = c,y_{ij+1}=c|x))
-    """
-    
-    lfweights = d[0:3210].reshape(10,321)
-    ltweights = d[3210:].reshape(10,10)
-    logprob = 0.
-    fderivatives = np.zeros((10,321))
-    tderivatives = np.zeros((10,10))
-    
-    for img, word in zip(train_imgs, train_words):
-        _, beta = process_test_word_mp(img, word, lfweights, ltweights)
-        Z = logsumexp(beta[0])
-        phi_ij = get_conditioned_weights(img, lfweights)
-        
-        #log likelihood
-        neg_erg = get_neg_energ(word, phi_ij, ltweights)
-        logprob += neg_erg - Z
-        
-        #derivatives:
-        P_yij = [0] * len(word)
-        for j in range(0,len(word)):
-            if j < len(beta):
-                b = beta[j]
-                P_yij[j] = np.exp(logsumexp(b, axis=1)-Z)
-            else:
-                b = beta[-1]
-                P_yij[j] = np.exp(logsumexp(b, axis=0)-Z)
-        
-        # feature derivatives:
-        for j, y_ij in enumerate(word):
-            for c in range(0,10):
-                P_c = P_yij[j][c]    
-                if y_ij == c:
-                    for f in range(0,321):
-                        fderivatives[c,f] += (1-P_c) * img[j][f]
-                else:
-                    for f in range(0,321):
-                        fderivatives[c,f] += (0-P_c) * img[j][f]
-                        
-        #transition derivatives:
-        
-        for j, (y_ij, y_ij_n) in enumerate(zip(word, word[1:])):
-            if j < len(beta):
-                b = beta[j]
-                P_ccn = np.exp(b-Z)
-            for c in range(0,10):
-                for cn in range(0,10):
-                    P = P_ccn[c,cn]
-                    if c == y_ij and cn == y_ij_n:
-                        tderivatives[c][cn] += 1 - P
-                    else:
-                        tderivatives[c][cn] += 0 - P
-    
-    derivatives = np.concatenate((fderivatives.reshape((3210)), tderivatives.reshape((100))))
-    #return the negative, because we are MINIMIZING
-    derivatives = derivatives * -1./float(len(train_imgs))
-    
-    #L2 regularization of derivatives
-    sigma = 10
-    derivatives += -1.0 * d / (2. * sigma * sigma)
-            
-    logprob = logprob / float(len(train_imgs))
-    
-    #L2 regularization
-    sigma = 10
-    reg = np.square(d)
-    reg /= 2. * sigma * sigma
-    logprob += -1.0 * reg.sum()
-    
-    print "logprob %f" % -logprob
-
-    #return the negative, because we are MINIMIZING
-    return (-logprob, derivatives) 
-
 def get_neg_energ(labels,phi_ij,phi_trans):
     """
     Get the negative energy given the labels and the transition weights
     """
     return get_neg_label_energy(labels, phi_ij) + get_neg_transition_energy(labels, phi_trans)
-
 
    
 
@@ -231,10 +151,87 @@ class CRFTrainer():
         self.n_fweights = self.n_labels*self.n_features
         self.n_tweights = self.n_labels*self.n_labels
         
+    def crf_log_lik(self, d, train_imgs, train_words):
+        """
+        lok-likelihood with respect to all model parameters W^T and W^F
+        
+        The derivates:
+        dL/dWccn = 1/N sum_N (sum_{j=1}^{L} [y_{ij} = c][y_{ij+1} = c] - P_{W}(y_{ij} = c,y_{ij+1}=c|x))
+        """
+        
+        lfweights = d[0:self.n_fweights].reshape(self.n_labels,self.n_features)
+        ltweights = d[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        logprob = 0.
+        fderivatives = np.zeros((self.n_labels,self.n_features))
+        tderivatives = np.zeros((self.n_labels,self.n_labels))
+        
+        for img, word in zip(train_imgs, train_words):
+            _, beta = process_test_word_mp(img, word, lfweights, ltweights)
+            Z = logsumexp(beta[0])
+            phi_ij = get_conditioned_weights(img, lfweights)
+            
+            #log likelihood
+            neg_erg = get_neg_energ(word, phi_ij, ltweights)
+            logprob += neg_erg - Z
+            
+            #derivatives:
+            P_yij = [0] * len(word)
+            for j in range(0,len(word)):
+                if j < len(beta):
+                    b = beta[j]
+                    P_yij[j] = np.exp(logsumexp(b, axis=1)-Z)
+                else:
+                    b = beta[-1]
+                    P_yij[j] = np.exp(logsumexp(b, axis=0)-Z)
+            
+            # feature derivatives:
+            for j, y_ij in enumerate(word):
+                for c in range(0,self.n_labels):
+                    P_c = P_yij[j][c]    
+                    if y_ij == c:
+                        for f in range(0,self.n_features):
+                            fderivatives[c,f] += (1-P_c) * img[j][f]
+                    else:
+                        for f in range(0,self.n_features):
+                            fderivatives[c,f] += (0-P_c) * img[j][f]
+                            
+            #transition derivatives:
+            
+            for j, (y_ij, y_ij_n) in enumerate(zip(word, word[1:])):
+                if j < len(beta):
+                    b = beta[j]
+                    P_ccn = np.exp(b-Z)
+                for c in range(0,self.n_labels):
+                    for cn in range(0,self.n_labels):
+                        P = P_ccn[c,cn]
+                        if c == y_ij and cn == y_ij_n:
+                            tderivatives[c][cn] += 1 - P
+                        else:
+                            tderivatives[c][cn] += 0 - P
+        
+        derivatives = np.concatenate((fderivatives.reshape((self.n_fweights)), tderivatives.reshape((self.n_tweights))))
+        #return the negative, because we are MINIMIZING
+        derivatives = derivatives * -1./float(len(train_imgs))
+        
+        #L2 regularization of derivatives
+        sigma = 10
+        derivatives += -1.0 * d / (2. * sigma * sigma)
+                
+        logprob = logprob / float(len(train_imgs))
+        
+        #L2 regularization
+        sigma = 10
+        reg = np.square(d)
+        reg /= 2. * sigma * sigma
+        logprob += -1.0 * reg.sum()
+        
+        print "logprob %f" % -logprob
+    
+        #return the negative, because we are MINIMIZING
+        return (-logprob, derivatives) 
+        
     def train(self):
-        
-        
-        res = minimize(crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True}, callback=self.test_accuracy)
+        res = minimize(self.crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True}, callback=self.test_accuracy)
         
         self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_fweights)
         self.tweights = res.x[self.n_fweights:].reshape(self.n_labels,self.n_labels)

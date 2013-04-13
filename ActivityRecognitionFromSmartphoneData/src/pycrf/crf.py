@@ -162,8 +162,9 @@ class CRFTrainer():
         lfweights = d[0:self.n_fweights].reshape(self.n_labels,self.n_features)
         ltweights = d[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         logprob = 0.
-        fderivatives = np.zeros((self.n_labels,self.n_features))
-        tderivatives = np.zeros((self.n_labels,self.n_labels))
+        derivatives = np.zeros(self.n_fweights + self.n_tweights)
+        fderivatives = derivatives[0:self.n_fweights].reshape(self.n_labels,self.n_features)
+        tderivatives = derivatives[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         
         for img, word in zip(train_imgs, train_words):
             _, beta = process_test_word_mp(img, word, lfweights, ltweights)
@@ -209,9 +210,8 @@ class CRFTrainer():
                         else:
                             tderivatives[c][cn] += 0 - P
         
-        derivatives = np.concatenate((fderivatives.reshape((self.n_fweights)), tderivatives.reshape((self.n_tweights))))
         #return the negative, because we are MINIMIZING
-        derivatives = derivatives * -1./float(len(train_imgs))
+        derivatives *= -1./float(len(train_imgs))
         
         #L2 regularization of derivatives
         sigma = 10

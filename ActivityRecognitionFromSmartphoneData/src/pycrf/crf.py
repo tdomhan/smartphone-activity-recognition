@@ -28,7 +28,7 @@ def predict_test_words(test_imgs,test_words,fweights,tweights):
     for i in range(0,len(test_words)):     
         #print "case %d" % (i+1)  
         #print "         word: %s" % id2char(test_words[i])
-        pword, _ = process_test_word_mp(test_imgs[i], test_words[i], fweights, tweights, debug = False)
+        pword, _ = process_test_word_mp(test_imgs[i], test_words[i], fweights, tweights)
         #print "predicted word %s" % id2char(pword)
         for j,c in enumerate(pword):
             num_characters+=1
@@ -233,15 +233,16 @@ class CRFTrainer():
         self.ys_test_labels = ys_test_labels
         self.n_labels = n_labels
         self.n_features = n_features
+        self.n_fweights = self.n_labels*self.n_features
+        self.n_tweights = self.n_labels*self.n_labels
         
     def train(self):
-        n_fweights = self.n_labels*self.n_features
-        n_tweights = self.n_labels*self.n_labels
         
-        res = minimize(crf_log_lik, np.zeros((n_fweights+n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True}, callback=self.test_accuracy)
         
-        self.fweights = res.x[0:n_fweights].reshape(self.n_labels,n_fweights)
-        self.tweights = res.x[n_fweights:].reshape(self.n_labels,self.n_labels)
+        res = minimize(crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True}, callback=self.test_accuracy)
+        
+        self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_fweights)
+        self.tweights = res.x[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         
     def get_weights(self):
         return (self.fweights, self.tweights)
@@ -249,8 +250,8 @@ class CRFTrainer():
     def test_accuracy(self, xk):
         if self.Xs_test == None or self.ys_test_labels == None:
             return
-        learnedfweights = xk[0:3210].reshape(10,321)
-        learnedtweights = xk[3210:].reshape(10,10)
+        learnedfweights = xk[0:self.n_fweights].reshape(self.n_labels,self.n_features)
+        learnedtweights = xk[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         
         predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights)
 
@@ -264,7 +265,7 @@ class LinearCRF(BaseEstimator):
         #TODO: implement!
         pass
     
-    def batch_fit(self, Xs, ys, Xs_test=None, ys_test=None):
+    def batch_fit(self, Xs, ys, sigma=None, Xs_test=None, ys_test=None):
         """Fit the CRF model according to the given training data.
 
         Parameters
@@ -275,6 +276,15 @@ class LinearCRF(BaseEstimator):
 
         y : iterable of array-like, shape = [n_samples]
             Target values (class labels)
+            
+        sigma: L2 regularization parameter
+        
+        Xs_test : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Test vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        ys_test : iterable of array-like, shape = [n_samples]
+            Test values (class labels)
 
         Returns
         -------

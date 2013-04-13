@@ -133,10 +133,19 @@ def process_test_word_mp(img,txt,fweights,tweights):
     return pword, beta
 
 def crf_log_lik(d, train_imgs, train_words):
-    #lok-likelihood with respect to all model parameters W^T and W^F
+    """
+    lok-likelihood with respect to all model parameters W^T and W^F
+    
+    The derivates:
+    dL/dWccn = 1/N sum_N (sum_{j=1}^{L} [y_{ij} = c][y_{ij+1} = c] - P_{W}(y_{ij} = c,y_{ij+1}=c|x))
+    """
+    
     lfweights = d[0:3210].reshape(10,321)
     ltweights = d[3210:].reshape(10,10)
     logprob = 0.
+    fderivatives = np.zeros((10,321))
+    tderivatives = np.zeros((10,10))
+    
     for img, word in zip(train_imgs, train_words):
         _, beta = process_test_word_mp(img, word, lfweights, ltweights)
         Z = logsumexp(beta[0])
@@ -147,40 +156,6 @@ def crf_log_lik(d, train_imgs, train_words):
         logprob += neg_erg - Z
         
         #derivatives:
-            
-    logprob = logprob / float(len(train_imgs))
-    
-    #L2 regularization
-    sigma = 10
-    reg = np.square(d)
-    reg /= 2. * sigma * sigma
-    logprob += -1.0 * reg.sum()
-
-    #return the negative, because we are MINIMIZING
-    return (-logprob,crf_log_lik_der(d, train_imgs, train_words)) 
-
-def get_neg_energ(labels,phi_ij,phi_trans):
-    """
-    Get the negative energy given the labels and the transition weights
-    """
-    return get_neg_label_energy(labels, phi_ij) + get_neg_transition_energy(labels, phi_trans)
-
-
-def crf_log_lik_der(d, train_imgs, train_words):
-    """
-    The actual derivates:
-    dL/dWccn = 1/N sum_N (sum_{j=1}^{L} [y_{ij} = c][y_{ij+1} = c] - P_{W}(y_{ij} = c,y_{ij+1}=c|x))
-    """
-    #lok-likelihood with respect to all model parameters W^T and W^F
-    lfweights = d[0:3210].reshape(10,321)
-    ltweights = d[3210:].reshape(10,10)
-    fderivatives = np.zeros((10,321))
-    tderivatives = np.zeros((10,10))
-    
-    for img, word in zip(train_imgs, train_words):
-        _, beta = process_test_word_mp(img, word, lfweights, ltweights)
-        Z = logsumexp(beta[0])
-        
         P_yij = [0] * len(word)
         for j in range(0,len(word)):
             if j < len(beta):
@@ -219,11 +194,31 @@ def crf_log_lik_der(d, train_imgs, train_words):
     #return the negative, because we are MINIMIZING
     derivatives = derivatives * -1./float(len(train_imgs))
     
-    #L2 regularization
+    #L2 regularization of derivatives
     sigma = 10
     derivatives += -1.0 * d / (2. * sigma * sigma)
+            
+    logprob = logprob / float(len(train_imgs))
     
-    return derivatives     
+    #L2 regularization
+    sigma = 10
+    reg = np.square(d)
+    reg /= 2. * sigma * sigma
+    logprob += -1.0 * reg.sum()
+    
+    print "logprob %f" % -logprob
+
+    #return the negative, because we are MINIMIZING
+    return (-logprob, derivatives) 
+
+def get_neg_energ(labels,phi_ij,phi_trans):
+    """
+    Get the negative energy given the labels and the transition weights
+    """
+    return get_neg_label_energy(labels, phi_ij) + get_neg_transition_energy(labels, phi_trans)
+
+
+   
 
 class CRFTrainer():
     def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features):
@@ -265,7 +260,7 @@ class LinearCRF(BaseEstimator):
         #TODO: implement!
         pass
     
-    def batch_fit(self, Xs, ys, sigma=None, Xs_test=None, ys_test=None):
+    def batch_fit(self, Xs, ys, Xs_test=None, ys_test=None, sigma=None):
         """Fit the CRF model according to the given training data.
 
         Parameters
@@ -315,8 +310,6 @@ class LinearCRF(BaseEstimator):
         trainer.train()
         
         self.fweights, self.tweights = trainer.get_weights()
-        
-        
         
         return self
     

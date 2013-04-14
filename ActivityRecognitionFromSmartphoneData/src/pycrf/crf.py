@@ -13,6 +13,10 @@ from scipy.misc import logsumexp
 
 from sklearn.base import BaseEstimator
 
+from profilehooks import *
+
+import time
+
 
 def predict_test_words(test_imgs,test_words,fweights,tweights):
     #print process_test_word_mp(test_imgs[i], test_words[i], fweights, tweights, debug = True)
@@ -29,6 +33,8 @@ def predict_test_words(test_imgs,test_words,fweights,tweights):
         #print "case %d" % (i+1)  
         #print "         word: %s" % id2char(test_words[i])
         pword, _ = process_test_word_mp(test_imgs[i], test_words[i], fweights, tweights)
+        print pword[0:100]
+        
         #print "predicted word %s" % id2char(pword)
         for j,c in enumerate(pword):
             num_characters+=1
@@ -127,8 +133,12 @@ def process_test_word_mp(img,txt,fweights,tweights):
         
     pword = []
     for b in beta:
-        pword.append(np.argmax(np.exp(logsumexp(b, axis=1))))
-    pword.append(np.argmax(np.exp(logsumexp(beta[-1], axis=0))))
+        #pword.append(np.argmax(np.exp(logsumexp(b, axis=1))))
+        pword.append(np.argmax(logsumexp(b, axis=1)))
+    #print "probabilities:"
+    #print np.exp(logsumexp(b, axis=1))
+    #pword.append(np.argmax(np.exp(logsumexp(beta[-1], axis=0))))
+    pword.append(np.argmax(logsumexp(beta[-1], axis=0)))
     
     return pword, beta
 
@@ -152,6 +162,7 @@ class CRFTrainer():
         self.n_tweights = self.n_labels*self.n_labels
         self.sigma_square = sigma**2 if sigma else None
         
+    #@profile(immediate=True)
     def crf_log_lik(self, d, train_imgs, train_words):
         """
         lok-likelihood with respect to all model parameters W^T and W^F
@@ -160,6 +171,8 @@ class CRFTrainer():
         dL/dWccn = 1/N sum_N (sum_{j=1}^{L} [y_{ij} = c][y_{ij+1} = c] - P_{W}(y_{ij} = c,y_{ij+1}=c|x))
         """
         
+        tick = time.clock()
+        
         lfweights = d[0:self.n_fweights].reshape(self.n_labels,self.n_features)
         ltweights = d[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         logprob = 0.
@@ -167,7 +180,12 @@ class CRFTrainer():
         fderivatives = derivatives[0:self.n_fweights].reshape(self.n_labels,self.n_features)
         tderivatives = derivatives[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         
+        #print "INITIALIZTAION: %f" % (time.clock() - tick)
+        tick = time.clock()
+        
         for img, word in zip(train_imgs, train_words):
+            #print "BEGIN WORD: %f" % (time.clock() - tick)
+            tick = time.clock()
             _, beta = process_test_word_mp(img, word, lfweights, ltweights)
             Z = logsumexp(beta[0])
             phi_ij = get_conditioned_weights(img, lfweights)
@@ -175,6 +193,9 @@ class CRFTrainer():
             #log likelihood
             neg_erg = get_neg_energ(word, phi_ij, ltweights)
             logprob += neg_erg - Z
+            
+            #print "LOG-LIK: %f" % (time.clock() - tick)
+            tick = time.clock()
             
             #derivatives:
             P_yij = [0] * len(word)
@@ -185,31 +206,49 @@ class CRFTrainer():
                 else:
                     b = beta[-1]
                     P_yij[j] = np.exp(logsumexp(b, axis=0)-Z)
+                    
+            #print "DER1: %f" % (time.clock() - tick)
+            tick = time.clock()
             
             # feature derivatives:
             for j, y_ij in enumerate(word):
                 for c in range(0,self.n_labels):
-                    P_c = P_yij[j][c]    
+                    P_c = P_yij[j][c]  
                     if y_ij == c:
-                        for f in range(0,self.n_features):
-                            fderivatives[c,f] += (1-P_c) * img[j][f]
+                        #TODO: vectorize!
+                        fderivatives[c,:] += (1-P_c) * img[j][:]
+                        #unvectorized code for reference
+                        #for f in range(0,self.n_features):
+                        #    fderivatives[c,f] += (1-P_c) * img[j][f]
                     else:
-                        for f in range(0,self.n_features):
-                            fderivatives[c,f] += (0-P_c) * img[j][f]
+                        #TODO: vectorize!
+                        fderivatives[c,:] += (0-P_c) * img[j][:]
+                        #unvectorized code for reference
+                        #for f in range(0,self.n_features):
+                        #    fderivatives[c,f] += (0-P_c) * img[j][f]
+                            
+            #print "DER2: %f" % (time.clock() - tick)
+            tick = time.clock()
                             
             #transition derivatives:
-            
             for j, (y_ij, y_ij_n) in enumerate(zip(word, word[1:])):
                 if j < len(beta):
                     b = beta[j]
                     P_ccn = np.exp(b-Z)
-                for c in range(0,self.n_labels):
-                    for cn in range(0,self.n_labels):
-                        P = P_ccn[c,cn]
-                        if c == y_ij and cn == y_ij_n:
-                            tderivatives[c][cn] += 1 - P
-                        else:
-                            tderivatives[c][cn] += 0 - P
+#                    
+##                tderivatives[y_ij][y_ij_n] += 1
+##                tderivatives += -P_ccn
+                
+                #unvectorized code for reference
+#                for c in range(0,self.n_labels):
+#                    for cn in range(0,self.n_labels):
+#                        P = P_ccn[c,cn]
+#                        if c == y_ij and cn == y_ij_n:
+#                            tderivatives[c][cn] += 1 - P
+#                        else:
+#                            tderivatives[c][cn] += 0 - P
+            #print "DER3: %f" % (time.clock() - tick)
+            tick = time.clock()
         
         derivatives *= 1./float(len(train_imgs))
         
@@ -219,6 +258,9 @@ class CRFTrainer():
         logprob = logprob / float(len(train_imgs))
         
         logprob += self.l2_regularization(d)
+        
+        print logprob
+        print derivatives[0:10]
     
         #return the negative loglik and derivatives, because we are MINIMIZING
         return (-logprob, -derivatives) 
@@ -251,6 +293,9 @@ class CRFTrainer():
         learnedfweights = xk[0:self.n_fweights].reshape(self.n_labels,self.n_features)
         learnedtweights = xk[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         
+        #print learnedtweights
+        #print learnedfweights
+        
         predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights)
 
 class LinearCRF(BaseEstimator):
@@ -262,6 +307,46 @@ class LinearCRF(BaseEstimator):
     def set_params(self, **parameters):
         #TODO: implement!
         pass
+    
+    def fit(self, X, y, X_test=None, y_test=None, sigma=None):
+        """Fit the CRF model (for a single chain) according to the given training data.
+
+        Parameters
+        ----------
+        X : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Training vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        y : iterable of array-like, shape = [n_samples]
+            Target values (class labels)
+            
+        sigma: L2 regularization parameter
+        
+        Xs_test : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Test vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        ys_test : iterable of array-like, shape = [n_samples]
+            Test values (class labels)
+
+        Returns
+        -------
+        self : object
+            Returns self.
+
+        Notes
+        ------
+        Nothing to note here ;)
+        
+        """
+        
+        Xs = [X]
+        ys = [y]
+        Xs_test = [X_test] if X_test != None else None
+        ys_test = [y_test] if y_test != None else None
+        self.batch_fit(Xs, ys, Xs_test, ys_test, sigma)
+        
+        return self
     
     def batch_fit(self, Xs, ys, Xs_test=None, ys_test=None, sigma=None):
         """Fit the CRF model according to the given training data.

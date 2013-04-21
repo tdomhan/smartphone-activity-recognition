@@ -284,10 +284,13 @@ class CRFTrainer():
         return reg
         
     def train(self):
-        res = minimize(self.crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True, 'maxiter': 100}, callback=self.test_accuracy)
+        try:
+            res = minimize(self.crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True, 'maxiter': 100}, callback=self.test_accuracy)
         
-        self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
-        self.tweights = res.x[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+            self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
+            self.tweights = res.x[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        except KeyboardInterrupt:
+            print "minimizing interrupted... using latest values"
         
     def get_weights(self):
         return (self.fweights, self.tweights)

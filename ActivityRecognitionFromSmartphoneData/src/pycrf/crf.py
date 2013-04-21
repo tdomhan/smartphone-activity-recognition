@@ -308,15 +308,27 @@ class CRFTrainer():
         
         predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights)
 
+def add_const_feature(X):
+    """
+    add a constant feature to all samples
+    """
+    Xshape = X.shape
+    Xnew = np.ones((Xshape[0],Xshape[1]+1))
+    Xnew[:,:-1] = X
+    return Xnew
+    
+
 class LinearCRF(BaseEstimator):
     
-    def __init__(self, sigma=None):
+    def __init__(self, addone=False, sigma=None):
         """
+            addone: add a feature that's always on to capture prior probabilities.
             sigma: L2 regularization parameter
         """
         self.label_names = np.array([])
         self.labels = np.array([])
         self.sigma = sigma
+        self.addone = addone
     
     def set_params(self, **parameters):
         #TODO: implement!
@@ -407,6 +419,20 @@ class LinearCRF(BaseEstimator):
 
         n_labels = len(self.label_names)
         
+        # add constant feature
+        if self.addone:
+            Xsnew = []
+            for X in Xs:
+                Xsnew.append(add_const_feature(X))
+            n_features += 1
+            Xs = Xsnew
+            if Xs_test:
+                Xs_test_new = []
+                for X in Xs_test:
+                    Xs_test_new.append(add_const_feature(X))
+                Xs_test = Xs_test_new
+                
+        
         self.trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, self.sigma)
         
         self.trainer.train()
@@ -417,6 +443,8 @@ class LinearCRF(BaseEstimator):
         return self
     
     def predict(self, X):
+        if self.addone:
+            X = add_const_feature(X)
         beta = process_labels_mp(X, self.fweights, self.tweights)
         labels = np.array(predict_labels(beta))
         labels = np.array([self.inv_label_mapper[l] for l in labels])
@@ -435,6 +463,8 @@ class LinearCRF(BaseEstimator):
         y_pred : array, shape = [n_samples]
         """
         results = []
+        
+        
         for X in Xs:
             results.append(self.predict(X))
 

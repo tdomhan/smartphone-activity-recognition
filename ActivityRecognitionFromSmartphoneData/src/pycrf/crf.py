@@ -296,15 +296,15 @@ class CRFTrainer():
         return (self.fweights, self.tweights)
 
     def test_accuracy(self, xk):
-        if self.Xs_test == None or self.ys_test_labels == None:
-            return
-        
         learnedfweights = xk[0:self.n_fweights].reshape(self.n_labels,self.n_features)
         learnedtweights = xk[self.n_fweights:].reshape(self.n_labels,self.n_labels)
         
         #TODO: don't store the temporary learned weights
         self.fweights = learnedfweights
         self.tweights = learnedtweights
+        
+        if self.Xs_test == None or self.ys_test_labels == None:
+            return
         
         predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights)
 

@@ -217,21 +217,26 @@ class CRFTrainer():
             
             # feature derivatives:
             for j, y_ij in enumerate(word):
-                for c in range(0,self.n_labels):
-                    P_c = P_yij[j][c]  
-                    if y_ij == c:
-                        #TODO: vectorize!
-                        fderivatives[c,:] += (1-P_c) * img[j][:]
-                        #unvectorized code for reference
-                        #for f in range(0,self.n_features):
-                        #    fderivatives[c,f] += (1-P_c) * img[j][f]
-                    else:
-                        #TODO: vectorize!
-                        fderivatives[c,:] += (0-P_c) * img[j][:]
-                        #unvectorized code for reference
-                        #for f in range(0,self.n_features):
-                        #    fderivatives[c,f] += (0-P_c) * img[j][f]
-                            
+                P_c = P_yij[j] # vector: P[c]
+                fderivatives += np.outer(-P_c, img[j][:])
+                fderivatives[y_ij,:] += img[j][:]
+                
+#                #unvectorized version for reference:
+#                for c in range(0,self.n_labels):
+#                    P_c = P_yij[j][c]  
+#                    if y_ij == c:
+#                        #TODO: vectorize!
+#                        fderivatives[c,:] += (1-P_c) * img[j][:]
+#                        #unvectorized code for reference
+#                        #for f in range(0,self.n_features):
+#                        #    fderivatives[c,f] += (1-P_c) * img[j][f]
+#                    else:
+#                        #TODO: vectorize!
+#                        fderivatives[c,:] += (0-P_c) * img[j][:]
+#                        #unvectorized code for reference
+#                        #for f in range(0,self.n_features):
+#                        #    fderivatives[c,f] += (0-P_c) * img[j][f]
+                        
             #print "DER2: %f" % (time.clock() - tick)
             tick = time.clock()
                             
@@ -252,7 +257,7 @@ class CRFTrainer():
 #                            tderivatives[c][cn] += 1 - P
 #                        else:
 #                            tderivatives[c][cn] += 0 - P
-            #print "DER3: %f" % (time.clock() - tick)
+            print "DER3: %f" % (time.clock() - tick)
             tick = time.clock()
         
         derivatives *= 1./float(len(train_imgs))

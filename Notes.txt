@@ -1,0 +1,5 @@
+What's next:
+
+ * analyze data
+ * create table that compares different approaches on the data (standard algorithms)
+ * adopt the python CRF code to work for this kinda data

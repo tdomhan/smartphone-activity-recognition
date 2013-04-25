@@ -1,3 +1,6 @@
 .metadata/
-.gitignore.swp
+*.swp
+*.pyc
+.project
+.pydevproject
 

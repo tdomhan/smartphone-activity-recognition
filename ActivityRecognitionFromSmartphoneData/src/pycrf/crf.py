@@ -17,26 +17,24 @@ from profilehooks import *
 
 import time
 
+def trans_weight_function(X):
+    """
+    Calculates (x(t)-x(t+1))^2
+    """
+    #X_diff = np.square(np.diff(X, n=1, axis=0))
+    X_diff = np.abs(np.diff(X, n=1, axis=0))
+    Xnew = np.zeros(X.shape)
+    Xnew[1:,:] = X_diff
+    return X_diff
 
-def predict_test_words(test_imgs,test_words,fweights,tweights):
-    #print process_labels_mp(test_imgs[i], fweights, tweights, debug = True)
-
-    #for i in range(0,5):     
-    #    print "case %d" % (i+1)  
-    #    print "         word: %s" % id2char(test_words[i])
-    #    pword, _ = process_labels_mp(test_imgs[i], fweights, tweights, debug = False)
-    #    print "predicted word %s" % id2char(pword)
+def predict_test_words(test_imgs,test_words,fweights,tweights,transition_weighting=False):
     
     num_characters = 0
     num_characters_correct = 0
     for i in range(0,len(test_words)):     
-        #print "case %d" % (i+1)  
-        #print "         word: %s" % id2char(test_words[i])
-        beta = process_labels_mp(test_imgs[i], fweights, tweights)
+        beta = process_labels_mp(test_imgs[i], fweights, tweights, transition_weighting)
         pword = predict_labels(beta)
-        #print pword[0:200]
-        
-        #print "predicted word %s" % id2char(pword)
+
         for j,c in enumerate(pword):
             num_characters+=1
             if c == test_words[i][j]:
@@ -59,6 +57,20 @@ def get_conditioned_weights(x, fweights):
         phi_ij.append(phi)
     return phi_ij
 
+
+def get_conditioned_t_weights(X, tweights):
+    """
+    Get the TRANSITION weights after conditioning on the observed data
+    """
+    #implement as a 2d np array
+    phi_ij = []
+    X_diff = trans_weight_function(X)
+    for i,l in enumerate(X_diff):
+        phi = tweights*l
+        phi = phi.sum(axis=2)
+        phi_ij.append(phi)
+    return phi_ij
+
 def get_neg_label_energy(labels, phi_ij):
     neg_engergy = 0
     for j,label in enumerate(labels):
@@ -67,28 +79,34 @@ def get_neg_label_energy(labels, phi_ij):
 
 def get_neg_transition_energy(labels, phi_trans):
     neg_engergy = 0
-    for j in range(0,len(labels)-1):
-        neg_engergy += phi_trans[labels[j]][labels[j+1]]
+    for j,phi_t in enumerate(phi_trans[:-1]):
+        neg_engergy += phi_t[labels[j]][labels[j+1]]
     return neg_engergy
 
 
-def process_labels_mp(img,fweights,tweights):
+def process_labels_mp(X,fweights,tweights, transition_weighting=False):
     """
     Sum-Product Message Passing
     """
     phi_ij = []
     #condition on the observed image sequence:
-    for i,l in enumerate(img):
+    for i,l in enumerate(X):
         phi = fweights*l
         phi = phi.sum(axis=1)
         #make phi a column vector
         phi.shape  = (phi.shape[0],1)
         phi_ij.append(phi)
+        
+    if transition_weighting:
+        phi_t = get_conditioned_t_weights(X, tweights)
+    else:
+        phi_t = [tweights for _ in range(len(X))]
+        
     #calculate the clique potentials
     psi = []
     for j in range(0,len(phi_ij)-1):
         #we need to add, because we are in log-space
-        p = tweights + phi_ij[j]
+        p = phi_t[j] + phi_ij[j]
         if j == len(phi_ij)-2:
             #the last entry gets two node potentials
             p = p + phi_ij[j+1].transpose()
@@ -156,7 +174,7 @@ def get_neg_energ(labels,phi_ij,phi_trans):
    
 
 class CRFTrainer():
-    def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, sigma):
+    def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, sigma, transition_weighting):
         self.Xs = Xs
         self.ys_labels = ys_labels
         self.Xs_test = Xs_test
@@ -166,6 +184,9 @@ class CRFTrainer():
         self.n_fweights = self.n_labels*self.n_features
         self.n_tweights = self.n_labels*self.n_labels
         self.sigma_square = sigma**2 if sigma else None
+        self.transition_weighting = transition_weighting
+        if transition_weighting:
+            self.n_tweights *= self.n_features
         
     #@profile(immediate=True)
     def crf_log_lik(self, d, train_imgs, train_words):
@@ -179,24 +200,35 @@ class CRFTrainer():
         tick = time.clock()
         
         lfweights = d[0:self.n_fweights].reshape(self.n_labels,self.n_features)
-        ltweights = d[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        if not self.transition_weighting:
+            ltweights = d[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        else:
+            ltweights = d[self.n_fweights:].reshape((self.n_labels,self.n_labels,self.n_features))
         logprob = 0.
         derivatives = np.zeros(self.n_fweights + self.n_tweights)
         fderivatives = derivatives[0:self.n_fweights].reshape(self.n_labels,self.n_features)
-        tderivatives = derivatives[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        if not self.transition_weighting:
+            tderivatives = derivatives[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        else:
+            tderivatives = derivatives[self.n_fweights:].reshape((self.n_labels,self.n_labels,self.n_features))
         
         #print "INITIALIZTAION: %f" % (time.clock() - tick)
         tick = time.clock()
         
-        for img, word in zip(train_imgs, train_words):
+        for X, word in zip(train_imgs, train_words):
             #print "BEGIN WORD: %f" % (time.clock() - tick)
             tick = time.clock()
-            beta = process_labels_mp(img, lfweights, ltweights)
+            beta = process_labels_mp(X, lfweights, ltweights, self.transition_weighting)
             Z = logsumexp(beta[0])
-            phi_ij = get_conditioned_weights(img, lfweights)
+            phi_ij = get_conditioned_weights(X, lfweights)
+            
+            if self.transition_weighting:
+                phi_t = get_conditioned_t_weights(X, ltweights)
+            else:
+                phi_t = [ltweights for _ in range(len(X))]
             
             #log likelihood
-            neg_erg = get_neg_energ(word, phi_ij, ltweights)
+            neg_erg = get_neg_energ(word, phi_ij, phi_t)
             logprob += neg_erg - Z
             
             #print "LOG-LIK: %f" % (time.clock() - tick)
@@ -218,37 +250,43 @@ class CRFTrainer():
             # feature derivatives:
             for j, y_ij in enumerate(word):
                 P_c = P_yij[j] # vector: P[c]
-                fderivatives += np.outer(-P_c, img[j][:])
-                fderivatives[y_ij,:] += img[j][:]
+                fderivatives += np.outer(-P_c, X[j][:])
+                fderivatives[y_ij,:] += X[j][:]
                 
 #                #unvectorized version for reference:
 #                for c in range(0,self.n_labels):
 #                    P_c = P_yij[j][c]  
 #                    if y_ij == c:
 #                        #TODO: vectorize!
-#                        fderivatives[c,:] += (1-P_c) * img[j][:]
+#                        fderivatives[c,:] += (1-P_c) * X[j][:]
 #                        #unvectorized code for reference
 #                        #for f in range(0,self.n_features):
-#                        #    fderivatives[c,f] += (1-P_c) * img[j][f]
+#                        #    fderivatives[c,f] += (1-P_c) * X[j][f]
 #                    else:
 #                        #TODO: vectorize!
-#                        fderivatives[c,:] += (0-P_c) * img[j][:]
+#                        fderivatives[c,:] += (0-P_c) * X[j][:]
 #                        #unvectorized code for reference
 #                        #for f in range(0,self.n_features):
-#                        #    fderivatives[c,f] += (0-P_c) * img[j][f]
+#                        #    fderivatives[c,f] += (0-P_c) * X[j][f]
                         
             #print "DER2: %f" % (time.clock() - tick)
             tick = time.clock()
                             
             #transition derivatives:
-            for j, (y_ij, y_ij_n) in enumerate(zip(word, word[1:])):
+            X_diff = trans_weight_function(X)
+            for j, (y_ij, y_ij_n, x_diff) in enumerate(zip(word, word[1:], X_diff)):
                 if j < len(beta):
                     b = beta[j]
                     P_ccn = np.exp(b-Z)
-                    
-                tderivatives[y_ij][y_ij_n] += 1
-                tderivatives += -P_ccn
+                   
+                if not self.transition_weighting:
+                    tderivatives[y_ij][y_ij_n] += 1
+                    tderivatives += -P_ccn
+                else:
+                    tderivatives[y_ij][y_ij_n] += x_diff
+                    tderivatives += np.outer(-P_ccn, x_diff).reshape((self.n_labels,self.n_labels,self.n_features))
                 
+                #TODO: put here the formula for better understanding
                 #unvectorized code for reference
 #                for c in range(0,self.n_labels):
 #                    for cn in range(0,self.n_labels):
@@ -257,7 +295,7 @@ class CRFTrainer():
 #                            tderivatives[c][cn] += 1 - P
 #                        else:
 #                            tderivatives[c][cn] += 0 - P
-            print "DER3: %f" % (time.clock() - tick)
+            #print "DER3: %f" % (time.clock() - tick)
             tick = time.clock()
         
         derivatives *= 1./float(len(train_imgs))
@@ -271,6 +309,8 @@ class CRFTrainer():
         
         print logprob
         print derivatives[0:10]
+        
+        print "max derivative: %f" % derivatives.max()
     
         #return the negative loglik and derivatives, because we are MINIMIZING
         return (-logprob, -derivatives) 
@@ -290,10 +330,14 @@ class CRFTrainer():
         
     def train(self):
         try:
-            res = minimize(self.crf_log_lik, np.zeros((self.n_fweights+self.n_tweights,1)), args = (self.Xs, self.ys_labels), method='BFGS', jac=True, options={'disp': True, 'maxiter': 100}, callback=self.test_accuracy)
+            x0 = np.zeros((self.n_fweights+self.n_tweights,1))
+            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method='L-BFGS-B', jac=True, options={'disp': True, 'maxiter': 100}, callback=self.test_accuracy)
         
             self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
-            self.tweights = res.x[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+            if not self.transition_weighting:
+                self.tweights = res.x[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+            else:
+                self.tweights = res.x[self.n_fweights:].reshape((self.n_labels,self.n_labels,self.n_features))
         except KeyboardInterrupt:
             print "minimizing interrupted... using latest values"
         
@@ -302,7 +346,10 @@ class CRFTrainer():
 
     def test_accuracy(self, xk):
         learnedfweights = xk[0:self.n_fweights].reshape(self.n_labels,self.n_features)
-        learnedtweights = xk[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        if not self.transition_weighting:
+            learnedtweights = xk[self.n_fweights:].reshape(self.n_labels,self.n_labels)
+        else:
+            learnedtweights = xk[self.n_fweights:].reshape((self.n_labels,self.n_labels,self.n_features))
         
         #TODO: don't store the temporary learned weights
         self.fweights = learnedfweights
@@ -311,7 +358,7 @@ class CRFTrainer():
         if self.Xs_test == None or self.ys_test_labels == None:
             return
         
-        predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights)
+        predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights, self.transition_weighting)
 
 def add_const_feature(X):
     """
@@ -325,15 +372,19 @@ def add_const_feature(X):
 
 class LinearCRF(BaseEstimator):
     
-    def __init__(self, addone=False, sigma=None):
+    def __init__(self, addone=False, sigma=None, transition_weighting=False):
         """
             addone: add a feature that's always on to capture prior probabilities.
             sigma: L2 regularization parameter
+            transition_weighting: if true the transition weights will be 
+            multiplies by f(x), which is a F dimensional vector of the data.
+            Hence the transition weights C x C x F dimenions
         """
         self.label_names = np.array([])
         self.labels = np.array([])
         self.sigma = sigma
         self.addone = addone
+        self.transition_weighting = transition_weighting
     
     def set_params(self, **parameters):
         #TODO: implement!
@@ -438,7 +489,7 @@ class LinearCRF(BaseEstimator):
                 Xs_test = Xs_test_new
                 
         
-        self.trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, self.sigma)
+        self.trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, self.sigma, self.transition_weighting)
         
         self.trainer.train()
         
@@ -450,12 +501,14 @@ class LinearCRF(BaseEstimator):
     def predict(self, X):
         if self.addone:
             X = add_const_feature(X)
-        beta = process_labels_mp(X, self.fweights, self.tweights)
+
+        beta = process_labels_mp(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
+        
         labels = np.array(predict_labels(beta))
         labels = np.array([self.inv_label_mapper[l] for l in labels])
         return labels
     
-    def predict_batch(self, Xs):
+    def batch_predict(self, Xs):
         """Perform inference on samples in X.
 
 
@@ -475,6 +528,27 @@ class LinearCRF(BaseEstimator):
 
         return results
     
+    def plot_important_features(self, n=100, best=True):
+        """
+            Plot the most important features (greatest values)
+        """
+        
+        print "feature weights:"
+        ranked_features = np.argsort(np.abs(self.fweights), axis=None)
+        if best:
+            ranked_features = ranked_features[::-1] #inverse to get the best first
+        
+        for f_idx in ranked_features[:n]:
+            pass
+        
+        print ""
+        print "transition weights:"
+        
+    def plot_most_important_features(self, n=100):
+        self.plot_important_features(n,best=True)
+        
+    def plot_least_important_features(self, n=100):
+        self.plot_important_features(n,best=False)
     
     def plot_weights(self):
         """

@@ -532,7 +532,7 @@ class LinearCRF(BaseEstimator):
 
         return results
     
-    def plot_important_features(self, n=10, best=True):
+    def plot_important_features(self, n=10, best=True, absolut=True):
         """
             Plot the most/least important features.
             
@@ -549,27 +549,35 @@ class LinearCRF(BaseEstimator):
             feature_names = ["feature %d" % d for d in range(self.fweights.shape[1])]
         
         print "feature weights:"
-        ranked_features = np.argsort(np.abs(self.fweights), axis=None)
+        if absolut:
+            ranked_features = np.argsort(np.abs(self.fweights), axis=None)
+        else:
+            ranked_features = np.argsort(self.fweights, axis=None)
+            
         if best:
             ranked_features = ranked_features[::-1] #inverse to get the best first
 
-        for fweights_idx in ranked_features[:n]:
+        for i, fweights_idx in enumerate(ranked_features[:n]):
             label_idx,feature_idx = np.unravel_index(fweights_idx, self.fweights.shape)
-            print "f: %s c: %s value: %f" % (feature_names[feature_idx], label_names[label_idx], self.fweights[fweights_idx])
+            print "%d. f: %s\t\t c: %s\t value: %f" % (i, feature_names[feature_idx], label_names[label_idx], self.fweights[(label_idx,feature_idx)])
         
         print ""
         print "transition weights:"
-        ranked_transitions = np.argsort(np.abs(self.fweights), axis=None)
+        if absolut:
+            ranked_transitions = np.argsort(np.abs(self.tweights), axis=None)
+        else:
+            ranked_transitions = np.argsort(self.tweights, axis=None)
+            
         if best:
             ranked_transitions = ranked_transitions[::-1] #inverse to get the best first
         
-        for tweights_idx in ranked_transitions:
+        for i, tweights_idx in enumerate(ranked_transitions[:n]):
             if not self.transition_weighting:
                 label_t0_idx,label_t1_idx = np.unravel_index(tweights_idx, self.tweights.shape)
-                print "c(t): %s c(t+1): %s value: %f" % (feature_names[feature_idx], label_names[label_idx], self.fweights[fweights_idx])
+                print "%d. c(t): %s\t c(t+1): %\t value: %f" % (i, feature_names[feature_idx], label_names[label_idx], self.fweights[fweights_idx])
             else:
                 label_t0_idx,label_t1_idx,feature_idx = np.unravel_index(tweights_idx, self.tweights.shape)
-                print "f(x): %s c(t): %s c(t+1): %s value: %f" % (feature_names[feature_idx], label_names[label_t0_idx], label_names[label_t1_idx] , self.tweights[tweights_idx])
+                print "%d. f(x): %s\t c(t): %s\t c(t+1): %s\t value: %f" % (i, feature_names[feature_idx], label_names[label_t0_idx], label_names[label_t1_idx] , self.tweights[(label_t0_idx,label_t1_idx,feature_idx)])
             
         
     def plot_most_important_features(self, n=10):

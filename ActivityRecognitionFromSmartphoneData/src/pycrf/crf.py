@@ -372,16 +372,20 @@ def add_const_feature(X):
 
 class LinearCRF(BaseEstimator):
     
-    def __init__(self, addone=False, sigma=None, transition_weighting=False):
+    def __init__(self, label_names=None, feature_names=None, addone=False, sigma=None, transition_weighting=False):
         """
+            label_names: array of str objects that represent the labels
+            feature_names: array of str objects that represent the features
             addone: add a feature that's always on to capture prior probabilities.
             sigma: L2 regularization parameter
             transition_weighting: if true the transition weights will be 
             multiplies by f(x), which is a F dimensional vector of the data.
             Hence the transition weights C x C x F dimenions
         """
-        self.label_names = np.array([])
+        self.labels_orig = np.array([])
         self.labels = np.array([])
+        self.label_names = label_names
+        self.feature_names = feature_names
         self.sigma = sigma
         self.addone = addone
         self.transition_weighting = transition_weighting
@@ -462,18 +466,18 @@ class LinearCRF(BaseEstimator):
         #TODO: check that all Xs have the same shape
         n_features = Xs[0].shape[1]
         
-        self.label_names, _ = np.unique(np.concatenate(ys), return_inverse=True)
+        self.labels_orig, _ = np.unique(np.concatenate(ys), return_inverse=True)
         self.label_mapper = defaultdict(lambda :-1)
-        self.label_mapper.update({label:i for i,label in enumerate(self.label_names)})
+        self.label_mapper.update({label:i for i,label in enumerate(self.labels_orig)})
         self.inv_label_mapper = defaultdict(lambda :-1)
-        self.inv_label_mapper.update({i:label for i,label in enumerate(self.label_names)})
+        self.inv_label_mapper.update({i:label for i,label in enumerate(self.labels_orig)})
         
         ys_labels = [np.array([self.label_mapper[i] for i in y]) for y in ys]
         ys_test_labels = None
         if ys_test:
             ys_test_labels = [np.array([self.label_mapper[i] for i in y]) for y in ys_test]
 
-        n_labels = len(self.label_names)
+        n_labels = len(self.labels_orig)
         
         # add constant feature
         if self.addone:
@@ -528,26 +532,50 @@ class LinearCRF(BaseEstimator):
 
         return results
     
-    def plot_important_features(self, n=100, best=True):
+    def plot_important_features(self, n=10, best=True):
         """
-            Plot the most important features (greatest values)
+            Plot the most/least important features.
+            
+            best: if True it'll plot the most important features, otherwise the least
+                  important ones.
         """
+        
+        label_names = self.label_names
+        if not label_names:
+            label_names = ["label %d" % d for d in range(self.fweights.shape[0])] 
+        
+        feature_names = self.feature_names
+        if not feature_names:
+            feature_names = ["feature %d" % d for d in range(self.fweights.shape[1])]
         
         print "feature weights:"
         ranked_features = np.argsort(np.abs(self.fweights), axis=None)
         if best:
             ranked_features = ranked_features[::-1] #inverse to get the best first
-        
-        for f_idx in ranked_features[:n]:
-            pass
+
+        for fweights_idx in ranked_features[:n]:
+            label_idx,feature_idx = np.unravel_index(fweights_idx, self.fweights.shape)
+            print "f: %s c: %s value: %f" % (feature_names[feature_idx], label_names[label_idx], self.fweights[fweights_idx])
         
         print ""
         print "transition weights:"
+        ranked_transitions = np.argsort(np.abs(self.fweights), axis=None)
+        if best:
+            ranked_transitions = ranked_transitions[::-1] #inverse to get the best first
         
-    def plot_most_important_features(self, n=100):
+        for tweights_idx in ranked_transitions:
+            if not self.transition_weighting:
+                label_t0_idx,label_t1_idx = np.unravel_index(tweights_idx, self.tweights.shape)
+                print "c(t): %s c(t+1): %s value: %f" % (feature_names[feature_idx], label_names[label_idx], self.fweights[fweights_idx])
+            else:
+                label_t0_idx,label_t1_idx,feature_idx = np.unravel_index(tweights_idx, self.tweights.shape)
+                print "f(x): %s c(t): %s c(t+1): %s value: %f" % (feature_names[feature_idx], label_names[label_t0_idx], label_names[label_t1_idx] , self.tweights[tweights_idx])
+            
+        
+    def plot_most_important_features(self, n=10):
         self.plot_important_features(n,best=True)
         
-    def plot_least_important_features(self, n=100):
+    def plot_least_important_features(self, n=10):
         self.plot_important_features(n,best=False)
     
     def plot_weights(self):
@@ -558,7 +586,7 @@ class LinearCRF(BaseEstimator):
         import matplotlib.pyplot as plt
         import matplotlib.cm as cm
 
-        n_labels = len(self.label_names)
+        n_labels = len(self.labels_orig)
                 
         plt.figure(1)
         for i in range(n_labels):

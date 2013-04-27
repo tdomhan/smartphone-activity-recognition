@@ -31,20 +31,29 @@ def trans_weight_function(X):
 def predict_test_words(test_imgs,test_words,fweights,tweights,transition_weighting=False):
     
     num_characters = 0
-    num_characters_correct = 0
+    num_characters_correct_marginal = 0
+    num_characters_correct_viterbi = 0
     for i in range(0,len(test_words)):     
         beta = process_labels_mp(test_imgs[i], fweights, tweights, transition_weighting)
-        pword = predict_labels(beta)
+        pword_marginal = predict_labels(beta)
+        pword_viterbi = crf_viterbi(test_imgs[i], fweights, tweights, transition_weighting)
 
-        for j,c in enumerate(pword):
+        for j,c in enumerate(pword_marginal):
             num_characters+=1
             if c == test_words[i][j]:
-                num_characters_correct+=1
+                num_characters_correct_marginal+=1
                 
-    accuracy = num_characters_correct/float(num_characters)
-    print "accuracy: %.4f" % accuracy
+        for j,c in enumerate(pword_viterbi):
+            if c == test_words[i][j]:
+                num_characters_correct_viterbi+=1
+            
+                
+    accuracy_marignal = num_characters_correct_marginal/float(num_characters)
+    accuracy_viterbi = num_characters_correct_viterbi/float(num_characters)
+    print "accuracy (marginal): %.4f" % accuracy_marignal
+    print "accuracy (viterbi): %.4f" % accuracy_viterbi
     
-    return accuracy
+    return (accuracy_marignal,accuracy_viterbi)
 
 def get_conditioned_weights(x, fweights):
     """
@@ -231,7 +240,7 @@ def get_neg_energ(labels,phi_ij,phi_trans):
    
 
 class CRFTrainer():
-    def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, sigma, transition_weighting):
+    def __init__(self, Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, regularization, lmbd, sigma, transition_weighting):
         self.Xs = Xs
         self.ys_labels = ys_labels
         self.Xs_test = Xs_test
@@ -240,6 +249,8 @@ class CRFTrainer():
         self.n_features = n_features
         self.n_fweights = self.n_labels*self.n_features
         self.n_tweights = self.n_labels*self.n_labels
+        self.regularization = regularization
+        self.lmbd = lmbd
         self.sigma_square = sigma**2 if sigma else None
         self.transition_weighting = transition_weighting
         if transition_weighting:
@@ -357,20 +368,43 @@ class CRFTrainer():
         
         derivatives *= 1./float(len(train_imgs))
         
-        #L2 regularization of derivatives
-        derivatives += self.l2_regularization_der(d)
-                
         logprob = logprob / float(len(train_imgs))
         
-        logprob += self.l2_regularization(d)
+        #L2 regularization of derivatives
+        if self.regularization and self.regularization == 'l2':
+            derivatives += self.l2_regularization_der(d)
+            logprob += self.l2_regularization(d)
+        elif self.regularization and self.regularization == 'l1':
+            derivatives += self.l1_regularization_der(d, derivatives)
+            logprob += self.l1_regularization(d)
         
-        print logprob
-        print derivatives[0:10]
         
+        print "logprob %f" % logprob
         print "max derivative: %f" % derivatives.max()
     
         #return the negative loglik and derivatives, because we are MINIMIZING
         return (-logprob, -derivatives) 
+    
+    def l1_regularization(self,d):
+        reg = np.abs(d).sum() * self.lmbd
+        return -1. * reg
+    
+    def l1_regularization_der(self,d,ders):
+        """
+            d: the terms to be regularized
+            ders: the derivatives of d
+            
+            TODO: this is not a proper implementation of L1 regularization!!
+        """
+        #subgradient stratgy: http://www.cs.ubc.ca/cgi-bin/tr/2009/TR-2009-19.pdf
+        reg = np.sign(d) * self.lmbd
+        #reg[np.where((reg == 0) & (ders < -self.lmbd))]  =   self.lmbd
+        #reg[np.where((reg == 0) & (ders >  self.lmbd))]  =  -self.lmbd
+        #inbetween = np.where((reg == 0) & ((ders < self.lmbd) & (ders > -self.lmbd)))
+        
+        #reg[np.where((reg == 0)] = self.lmbd
+        
+        return -1. * reg
     
     def l2_regularization(self,d):
         if not self.sigma_square:
@@ -391,6 +425,7 @@ class CRFTrainer():
             method = 'BFGS'
             if self.transition_weighting:
                 method = 'L-BFGS-B'
+            method = 'L-BFGS-B'
             res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True}, callback=self.test_accuracy)
         
             self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
@@ -417,8 +452,6 @@ class CRFTrainer():
         if self.Xs_test == None or self.ys_test_labels == None:
             return
         
-        #TODO: handle the case of transition_weights
-        
         predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights, self.transition_weighting)
 
 def add_const_feature(X):
@@ -433,11 +466,13 @@ def add_const_feature(X):
 
 class LinearCRF(BaseEstimator):
     
-    def __init__(self, label_names=None, feature_names=None, addone=False, sigma=None, transition_weighting=False):
+    def __init__(self, label_names=None, feature_names=None, addone=False, regularization=None, lmbd=None, sigma=None, transition_weighting=False):
         """
             label_names: array of str objects that represent the labels
             feature_names: array of str objects that represent the features
             addone: add a feature that's always on to capture prior probabilities.
+            regularization: None, 'l1' or 'l2'
+            lamb: L1 regularization parameter
             sigma: L2 regularization parameter
             transition_weighting: if true the transition weights will be 
             multiplies by f(x), which is a F dimensional vector of the data.
@@ -447,9 +482,14 @@ class LinearCRF(BaseEstimator):
         self.labels = np.array([])
         self.label_names = label_names
         self.feature_names = feature_names
+        self.regularization = regularization
+        self.lmbd = lmbd
         self.sigma = sigma
         self.addone = addone
         self.transition_weighting = transition_weighting
+    
+        if regularization == 'l1':
+            print "warning: L1 not implemented, sorry!"
     
     def set_params(self, **parameters):
         #TODO: implement!
@@ -562,7 +602,7 @@ class LinearCRF(BaseEstimator):
                 Xs_test = Xs_test_new
                 
         
-        self.trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, self.sigma, self.transition_weighting)
+        self.trainer = CRFTrainer(Xs, ys_labels, Xs_test, ys_test_labels, n_labels, n_features, self.regularization, self.lmbd, self.sigma, self.transition_weighting)
         
         self.trainer.train()
         
@@ -669,15 +709,15 @@ class LinearCRF(BaseEstimator):
 
         n_labels = len(self.labels_orig)
                 
-        plt.figure(1)
-        for i in range(n_labels):
-            #TODO: generalize
-            plt.subplot(2,5,i+1);
-            plt.imshow(np.reshape(self.fweights[i,1:],(16,20)).T,interpolation='nearest',cmap = cm.Greys_r);
-            #plt.title(labels[i]);
-            plt.colorbar(shrink=0.6)
-            plt.xticks([])
-            plt.yticks([])
+#        plt.figure(1)
+#        for i in range(n_labels):
+#            #TODO: generalize
+#            plt.subplot(2,5,i+1);
+#            plt.imshow(np.reshape(self.fweights[i,1:],(16,20)).T,interpolation='nearest',cmap = cm.Greys_r);
+#            #plt.title(labels[i]);
+#            plt.colorbar(shrink=0.6)
+#            plt.xticks([])
+#            plt.yticks([])
         
         plt.figure(2)
         plt.imshow(self.tweights,interpolation='nearest',cmap = cm.Greys_r);

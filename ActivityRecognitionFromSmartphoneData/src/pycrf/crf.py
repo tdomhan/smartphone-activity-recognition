@@ -13,16 +13,17 @@ from scipy.misc import logsumexp
 
 from sklearn.base import BaseEstimator
 
-from profilehooks import *
-
 import time
 
 def trans_weight_function(X):
     """
     Calculates (x(t)-x(t+1))^2
+    
+    This function will be used to weight the transition weights.
     """
-    #X_diff = np.square(np.diff(X, n=1, axis=0))
-    X_diff = np.abs(np.diff(X, n=1, axis=0))
+    #X_diff = np.square(np.diff(X, n=1, axis=0)) # squared diff
+    #X_diff = np.abs(np.diff(X, n=1, axis=0))    # absolute diff
+    X_diff =  np.diff(X, n=1, axis=0)            # plain diff
     Xnew = np.zeros(X.shape)
     Xnew[1:,:] = X_diff
     return X_diff
@@ -84,9 +85,65 @@ def get_neg_transition_energy(labels, phi_trans):
     return neg_engergy
 
 
-def process_labels_mp(X,fweights,tweights, transition_weighting=False):
+def crf_viterbi(X, fweights, tweights, transition_weighting=False):
+    """
+        Calculate the most likely labeling sequence using the Viterbi algorithm.
+        
+        y = argmax_y P(x,y)
+        
+    """
+    
+    #First let's calculate the clique potentials
+    
+    len_sequence = len(X)
+    
+    phi_ij = []
+    #condition on the observed image sequence:
+    for i,l in enumerate(X):
+        phi = fweights*l
+        phi = phi.sum(axis=1)
+        #make phi a column vector
+        phi.shape  = (phi.shape[0],1)
+        phi_ij.append(phi)
+        
+    if transition_weighting:
+        phi_t = get_conditioned_t_weights(X, tweights)
+    else:
+        phi_t = [tweights for _ in range(len(X))]
+        
+    #calculate the clique potentials
+    psi = []
+    for j in range(0,len(phi_ij)-1):
+        #we need to add, because we are in log-space
+        p = phi_t[j] + phi_ij[j]
+        if j == len(phi_ij)-2:
+            #the last entry gets two node potentials
+            p = p + phi_ij[j+1].transpose()
+        psi.append(p)
+    
+    delta = np.zeros(len(phi_t[0]))
+    backtraces = []
+    labels = []
+    
+    for j in range(0,len_sequence-1):
+        delta = np.max(psi[j] + delta[:,np.newaxis],axis=0)
+        backtraces.append(np.argmax(psi[j] + delta[:,np.newaxis],axis=0))
+    
+    best_final_state = np.argmax(delta)
+    labels.append(best_final_state)
+    
+    for back in reversed(backtraces):
+        labels.append(back[labels[-1]])
+    labels.reverse()
+    return labels
+    
+
+def process_labels_mp(X, fweights, tweights, transition_weighting=False):
     """
     Sum-Product Message Passing
+    
+    return: beta
+            can be used to calculate the marignal probabilities.
     """
     phi_ij = []
     #condition on the observed image sequence:
@@ -331,7 +388,10 @@ class CRFTrainer():
     def train(self):
         try:
             x0 = np.zeros((self.n_fweights+self.n_tweights,1))
-            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method='L-BFGS-B', jac=True, options={'disp': True, 'maxiter': 100}, callback=self.test_accuracy)
+            method = 'BFGS'
+            if self.transition_weighting:
+                method = 'L-BFGS-B'
+            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True}, callback=self.test_accuracy)
         
             self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
             if not self.transition_weighting:
@@ -351,12 +411,13 @@ class CRFTrainer():
         else:
             learnedtweights = xk[self.n_fweights:].reshape((self.n_labels,self.n_labels,self.n_features))
         
-        #TODO: don't store the temporary learned weights
         self.fweights = learnedfweights
         self.tweights = learnedtweights
         
         if self.Xs_test == None or self.ys_test_labels == None:
             return
+        
+        #TODO: handle the case of transition_weights
         
         predict_test_words(self.Xs_test,self.ys_test_labels,learnedfweights,learnedtweights, self.transition_weighting)
 
@@ -393,6 +454,14 @@ class LinearCRF(BaseEstimator):
     def set_params(self, **parameters):
         #TODO: implement!
         pass
+    
+    def save_weights(self, prefix="crf"):
+        np.savetxt(prefix+"_wf.txt", self.fweights)
+        np.savetxt(prefix+"_wt.txt", self.tweights)
+    
+    def load_weights(self,prefix="crf"):
+        self.fweights = np.loadtxt(prefix+"_wf.txt")
+        self.tweights = np.loadtxt(prefix+"_wt.txt")
     
     def fit(self, X, y, X_test=None, y_test=None):
         """Fit the CRF model (for a single chain) according to the given training data.
@@ -509,6 +578,9 @@ class LinearCRF(BaseEstimator):
         beta = process_labels_mp(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
         
         labels = np.array(predict_labels(beta))
+        
+        labels = crf_viterbi(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
+        
         labels = np.array([self.inv_label_mapper[l] for l in labels])
         return labels
     

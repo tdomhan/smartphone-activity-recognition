@@ -22,9 +22,10 @@ from sklearn.preprocessing import Scaler
 
 from sklearn.preprocessing import OneHotEncoder
 
-from sklearn import cross_validation
 
 from pycrf.crf import LinearCRF
+from svmhmm import SVMHMMCRF
+from sklearn.metrics import accuracy_score
 
 from utils import *
 
@@ -87,40 +88,8 @@ def predict_with_last_action(clf, X, onehot):
         
     return y_predict
 
-def unflatten_per_person(X_all,y_all,persons_all):
-    """
-        X: n_samples, n_features
-            The full feature matrix.
-        y: label for each row in X
-        person: person label for each row in X
-        
-        returns: (X_person, y_person) 
-            X_person: n_persons array of X and y that apply to this person.
-    """
-    Xtotal = []
-    y_total = []
-    
-    Xperson = []
-    y_person = []
-    last_person = persons_all[0]
-    for row,y,person in zip(X_all,y_all,persons_all):
-        if person != last_person:
-            Xtotal.append(Xperson)
-            y_total.append(y_person)
-            Xperson = []
-            y_person = []
-            
-        Xperson.append(row)
-        y_person.append(y)
-        
-        last_person = person
-        
-    Xtotal.append(Xperson)
-    y_person.append(y_person)
-    
-    return ([np.array(x) for x in Xtotal], [np.array(y) for y in y_total])
 
-
+    
 
 if __name__ == '__main__':
     print "loading data"
@@ -130,6 +99,9 @@ if __name__ == '__main__':
     X_test = np.loadtxt('../../UCI HAR Dataset/test/X_test.txt')
     y_test = np.loadtxt('../../UCI HAR Dataset/test/y_test.txt', dtype=np.int)
     persons_test = np.loadtxt('../../UCI HAR Dataset/test/subject_test.txt', dtype=np.int)
+    
+    X_all = np.concatenate([X_train, X_test])
+    y_all = np.concatenate([y_train, y_test])
     
     #SVM-HMM dumping
     #dump_svmlight_file(X_test,y_test,"/Users/tdomhan/Downloads/svm_hmm/activity-data/Xtest.data",zero_based=False,query_id=persons_test)
@@ -151,6 +123,31 @@ if __name__ == '__main__':
     y_pers_all.extend(y_test_pers)
     
     print "training classifier"
+    
+    classifiers = {
+                   "Logistic Regression": {'clf': LogisticRegression(), 'structured:': False},
+                   "Logistic Regression (l1 regularized)": {'clf': LogisticRegression(penalty='l1',C=100), 'structured:': False},
+                   "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured:': False},
+                   "Gaussian Naive Bayes": {'clf': GaussianNB(), 'structured:': False},
+                   "SVMHMM": {'clf': SVMHMMCRF(C=1), 'structured:': True},
+                   }
+    
+    results = {}
+    
+    for name, clf in classifiers.iteritems():
+        print "running %s" % name
+        clf_results = fit_clf_kfold(clf['clf'], X_pers_all, y_pers_all,flatten=not clf['structured'])
+        results[name] = clf_results
+        
+    for name, clf in classifiers.iteritems():
+        clf_results = results[name]
+        accuracies = np.array([accuracy_score(gold, predict) for gold, predict in clf_results])
+        
+        print "%s accuracy: %f +- %f" % (name, accuracies.mean(), accuracies.std())
+        
+        y_all_gold = np.concatenate(zip(*clf_results)[0])
+        y_all_predict = np.concatenate(zip(*clf_results)[1])
+    
     
     #sklearn
     #clf = svm.SVC()
@@ -188,13 +185,15 @@ if __name__ == '__main__':
 #    y_predict = predict_with_last_action(clf, X_test, onehot)
     
     
-    clf = LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization=None, lmbd=0.01, sigma=100, transition_weighting=False)
+    #clf = LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization=None, lmbd=0.01, sigma=100, transition_weighting=False)
+    
     #a single chain:
     #clf.fit(X_train, y_train, X_test, y_test)
     #y_predict = clf.predict(X_test)
     #one chain per person
-    clf.batch_fit(X_train_pers, y_train_pers, X_test_pers, y_test_pers)
-    y_predict = np.concatenate(clf.batch_predict(X_test_pers))
+    
+    #clf.batch_fit(X_train_pers, y_train_pers, X_test_pers, y_test_pers)
+    #y_predict = np.concatenate(clf.batch_predict(X_test_pers))
     
 #    #clf = LinearCRF(sigma=10)
 #    X_train_svm, X_test_svm = SVM_feature_extraction(X_train, y_train, X_test)
@@ -210,9 +209,9 @@ if __name__ == '__main__':
     
     #y_predict = clf.predict(X_test)
     
-    print classification_report(y_test, y_predict, target_names = labels)
+    #print classification_report(y_test, y_predict, target_names = labels)
     
-    print confusion_matrix_report(y_test, y_predict, labels)
+    #print confusion_matrix_report(y_test, y_predict, labels)
     
     # measure the transitions we get right:
     

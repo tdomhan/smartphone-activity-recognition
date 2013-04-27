@@ -571,26 +571,27 @@ class LinearCRF(BaseEstimator):
         
         return self
     
-    def predict(self, X):
+    def predict(self, X, viterbi=False):
         if self.addone:
             X = add_const_feature(X)
 
-        beta = process_labels_mp(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
-        
-        labels = np.array(predict_labels(beta))
-        
-        labels = crf_viterbi(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
+        if viterbi:
+            labels = crf_viterbi(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
+        else:
+            beta = process_labels_mp(X, self.fweights, self.tweights, transition_weighting=self.transition_weighting)
+            labels = np.array(predict_labels(beta))
         
         labels = np.array([self.inv_label_mapper[l] for l in labels])
         return labels
     
-    def batch_predict(self, Xs):
+    def batch_predict(self, Xs, viterbi=False):
         """Perform inference on samples in X.
 
 
         Parameters
         ----------
         X : iteratble of {array-like, sparse matrix}, shape = [n_samples, n_features]
+        viterbi: if True the virterbi algorithm is used, if false the marginal probability P(y_t, y_t-1|x) is used instead.
 
         Returns
         -------

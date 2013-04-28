@@ -9,6 +9,8 @@ Let's do some prilimary test
 
 import numpy as np
 
+import pickle
+
 #algorithms
 from sklearn import svm
 from sklearn.linear_model import LogisticRegression
@@ -17,13 +19,18 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+
+from sklearn.ensemble import RandomForestClassifier
+
+from sklearn.tree import DecisionTreeClassifier
 
 from sklearn.preprocessing import Scaler
 
 from sklearn.preprocessing import OneHotEncoder
 
 
-from pycrf.crf import LinearCRF
+from pycrf.crf import LinearCRF, LinearCRFEnsemble
 from svmhmm import SVMHMMCRF
 from sklearn.metrics import accuracy_score
 
@@ -88,7 +95,17 @@ def predict_with_last_action(clf, X, onehot):
         
     return y_predict
 
-
+def run_clfs_on_data(classifiers, X_pers_all, y_pers_all):
+    results = {}
+    
+    for name, clf in classifiers.iteritems():
+        print "running %s" % name
+        clf_results = fit_clf_kfold(clf['clf'], X_pers_all, y_pers_all,flatten=not clf['structured'])
+        # with feature selection:
+        #clf_results = fit_clf_kfold(clf['clf'], [X[:,select_features] for X in X_pers_all], y_pers_all,flatten=not clf['structured'])
+        results[name] = clf_results
+        
+    return results
     
 
 if __name__ == '__main__':
@@ -102,6 +119,9 @@ if __name__ == '__main__':
     
     X_all = np.concatenate([X_train, X_test])
     y_all = np.concatenate([y_train, y_test])
+    
+    
+    features_selected = pickle.load(open('selected_features.pickle'))
     
     #SVM-HMM dumping
     #dump_svmlight_file(X_test,y_test,"/Users/tdomhan/Downloads/svm_hmm/activity-data/Xtest.data",zero_based=False,query_id=persons_test)
@@ -124,29 +144,55 @@ if __name__ == '__main__':
     
     print "training classifier"
     
+    ensemble_classifiers = {
+                                "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured': False},
+                                "Logistic Regression": {'clf': LogisticRegression(), 'structured': False},
+                                "KNN (weights: uniform, neighbors=5)": {'clf': KNeighborsClassifier(), 'structured': False},
+                                "Decision Tree": {'clf': DecisionTreeClassifier(), 'structured': False},
+                                "RandomForest": {'clf': RandomForestClassifier(), 'structured': False}
+                                }
+    crf_ensemble = LinearCRFEnsemble(ensemble_classifiers, addone=True, regularization=None, lmbd=0.01, sigma=100, transition_weighting=False)
+    
     classifiers = {
-                   "Logistic Regression": {'clf': LogisticRegression(), 'structured:': False},
-                   "Logistic Regression (l1 regularized)": {'clf': LogisticRegression(penalty='l1',C=100), 'structured:': False},
-                   "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured:': False},
-                   "Gaussian Naive Bayes": {'clf': GaussianNB(), 'structured:': False},
-                   "SVMHMM": {'clf': SVMHMMCRF(C=1), 'structured:': True},
+                   "Logistic Regression": {'clf': LogisticRegression(), 'structured': False},
+                   "Logistic Regression (l1 regularized)": {'clf': LogisticRegression(penalty='l1',C=100), 'structured': False},
+                   "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured': False},
+                   "Gaussian Naive Bayes": {'clf': GaussianNB(), 'structured': False},
+                   "SVMHMM": {'clf': SVMHMMCRF(C=1), 'structured': True},
+                   "KNN (weights: uniform, neighbors=5)": {'clf': KNeighborsClassifier(), 'structured': False},
+                   "Decision Tree": {'clf': DecisionTreeClassifier(), 'structured': False},
+                   "RandomForest": {'clf': RandomForestClassifier(), 'structured': False},
                    }
     
-    results = {}
+    results = run_clfs_on_data(classifiers, X_pers_all, y_pers_all)
     
-    for name, clf in classifiers.iteritems():
-        print "running %s" % name
-        clf_results = fit_clf_kfold(clf['clf'], X_pers_all, y_pers_all,flatten=not clf['structured'])
-        results[name] = clf_results
-        
-    for name, clf in classifiers.iteritems():
-        clf_results = results[name]
+    for clf_name in results:
+        clf_results = results[clf_name]
         accuracies = np.array([accuracy_score(gold, predict) for gold, predict in clf_results])
-        
-        print "%s accuracy: %f +- %f" % (name, accuracies.mean(), accuracies.std())
+        print "%s accuracy: %f +- %f" % (clf_name, accuracies.mean(), accuracies.std())
         
         y_all_gold = np.concatenate(zip(*clf_results)[0])
         y_all_predict = np.concatenate(zip(*clf_results)[1])
+        
+    
+    crf_classifiers_l2_best = {
+                   "CRF (sigma=1)": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=1, transition_weighting=False),
+                            'structured': True},
+                   "CRF (sigma=10)": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=10, transition_weighting=False),
+                            'structured': True},
+                    "CRF (sigma=100)": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=100, transition_weighting=False),
+                            'structured': True},
+                    "CRF (sigma=1000)": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=1000, transition_weighting=False),
+                            'structured': True},
+                    "CRF (sigma=.1)": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=0.1, transition_weighting=False),
+                            'structured': True},
+                   }
+    
+    #results_feature_selection = run_clfs_on_data(classifiers, [X[:,features_selected] for X in X_pers_all], y_pers_all)
+    
+    
+    #clf_results = fit_clf_kfold(clf, X_pers_all, y_pers_all,flatten=False)
+    
     
     
     #sklearn

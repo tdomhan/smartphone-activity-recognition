@@ -109,6 +109,7 @@ def fit_clf_kfold(clf,Xs,ys,flatten=True,n_folds=5):
         else:
             clf.batch_fit(X_train,y_train)
             y_predict = clf.batch_predict(X_test)
+            y_predict = np.concatenate(y_predict)
             y_gold = np.concatenate(y_test)
         
         result.append((y_gold,y_predict))

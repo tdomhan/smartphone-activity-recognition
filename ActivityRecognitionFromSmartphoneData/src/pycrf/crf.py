@@ -11,6 +11,8 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.misc import logsumexp
 
+from utils import flatten_data
+
 from sklearn.base import BaseEstimator
 
 import time
@@ -426,7 +428,7 @@ class CRFTrainer():
             if self.transition_weighting:
                 method = 'L-BFGS-B'
             method = 'L-BFGS-B'
-            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True}, callback=self.test_accuracy)
+            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True, 'maxiter':100, 'maxfun':100}, callback=self.test_accuracy)
         
             self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
             if not self.transition_weighting:
@@ -463,6 +465,7 @@ def add_const_feature(X):
     Xnew[:,:-1] = X
     return Xnew
     
+
 
 class LinearCRF(BaseEstimator):
     
@@ -514,8 +517,6 @@ class LinearCRF(BaseEstimator):
 
         y : iterable of array-like, shape = [n_samples]
             Target values (class labels)
-            
-        sigma: L2 regularization parameter
         
         Xs_test : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
             Test vectors, where n_samples is the number of samples
@@ -726,3 +727,154 @@ class LinearCRF(BaseEstimator):
         plt.colorbar();
         
         plt.show()
+        
+class LinearCRFEnsemble(BaseEstimator):
+    #http://scikit-learn.org/dev/modules/generated/sklearn.preprocessing.LabelBinarizer.html
+    def __init__(self, classifiers, **kwargs):
+        """
+            classifiers is a dictionary of classifiers instances that will be used for the Ensemble:
+            classifiers = {
+                            "Support Vector Classifier": {'clf': LinearSVC(), 'structured:': False},
+                           }
+                           
+            Each of the classifiers must have a fit(X,y) function
+            and either of the following: predict_proba or decision_function
+        """
+        
+        #label_names = kwargs['label_names']
+        #feature_names = ["%s"] #add CLF - FEATURE feature names
+        
+        self.crf = LinearCRF(kwargs)
+        self.classifiers = classifiers
+        
+        
+    def fit(self, X, y, X_test=None, y_test=None):
+        """Fit the CRF model (for a single chain) according to the given training data.
+
+        Parameters
+        ----------
+        X : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Training vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        y : iterable of array-like, shape = [n_samples]
+            Target values (class labels)
+        
+        Xs_test : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Test vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        ys_test : iterable of array-like, shape = [n_samples]
+            Test values (class labels)
+
+        Returns
+        -------
+        self : object
+            Returns self.
+
+        Notes
+        ------
+        Nothing to note here ;)
+        
+        """
+        Xs = [X]
+        ys = [y]
+        Xs_test = [X_test] if X_test != None else None
+        ys_test = [y_test] if y_test != None else None
+        self.batch_fit(Xs, ys, Xs_test, ys_test)
+        
+        return self
+        
+        return self
+    
+    def batch_fit(self, Xs, ys, Xs_test=None, ys_test=None):
+        """Fit the CRF model according to the given training data.
+
+        Parameters
+        ----------
+        X : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Training vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        y : iterable of array-like, shape = [n_samples]
+            Target values (class labels)
+        
+        Xs_test : iterable of {array-like, sparse matrix}, shape = [n_samples, n_features]
+            Test vectors, where n_samples is the number of samples
+            and n_features is the number of features.
+
+        ys_test : iterable of array-like, shape = [n_samples]
+            Test values (class labels)
+
+        Returns
+        -------
+        self : object
+            Returns self.
+
+        Notes
+        ------
+        Nothing to note here ;)
+        
+        """
+    
+        """ Create a flattened version of the data for non-structured classifiers. """
+    
+        X_flat, y_flat = flatten_data(Xs, ys)
+    
+        """ First we fit the classifiers separately: """
+        for name, clf in self.classifiers.iteritems():
+            print "Fitting %s." % name
+            flatten= not clf['structured']
+            if flatten:
+                clf['clf'].fit(X_flat, y_flat)
+            else:
+                #right now we only support non-structured classifiers
+                raise NotImplementedError()
+                #clf['clf'].batch_fit(Xs, ys)
+        
+        """ Now we transform the data by getting a score from each predictor: """
+        Xs_transformed = [self.transform(X) for X in Xs] # TODO: support a transform for strutured predictors
+        self.crf.batch_fit(Xs_transformed, ys)
+        
+        return self
+    
+    def transform(self, X):
+        all_x = []
+        for name, clf in self.classifiers.iteritems():
+            if hasattr(clf['clf'],'predict_proba'):
+                all_x.append(clf['clf'].predict_proba(X))
+            elif hasattr(clf['clf'],'decision_function'):
+                all_x.append(clf['clf'].decision_function(X))
+            else:
+                print "Classifier %s unssuported" % name
+                continue
+        return np.concatenate(all_x, axis=1)
+    
+    def batch_transform(self, Xs):
+        raise NotImplementedError()
+    
+    def predict(self, X):
+        X_transformed = self.transform(X)
+
+        return self.crf.predict(X_transformed, viterbi=False)
+    
+    def batch_predict(self, Xs):
+        """Perform inference on samples in X.
+
+        Parameters
+        ----------
+        X : iteratble of {array-like, sparse matrix}, shape = [n_samples, n_features]
+        viterbi: if True the virterbi algorithm is used, if false the marginal probability P(y_t, y_t-1|x) is used instead.
+
+        Returns
+        -------
+        y_pred : array, shape = [n_samples]
+        """
+        results = []
+        
+        for X in Xs:
+            results.append(self.predict(X))
+
+        return results
+        
+        

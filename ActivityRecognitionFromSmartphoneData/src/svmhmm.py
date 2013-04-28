@@ -56,7 +56,15 @@ class SVMHMMCRF(BaseEstimator):
 
         print call([self.path + "svm_hmm_classify", "Xtest.data", "svmhmm-model.dat", "svmhmm-classified.tag"])
         y_predict = np.loadtxt("svmhmm-classified.tag")
-        return y_predict
+        
+        idx = 0
+        ys = []
+        for i in range(len(Xs)):
+            num = len(Xs[i])
+            ys.append(y_predict[idx:idx+num])
+            idx += num
+        
+        return ys
     
     
     

@@ -8,6 +8,8 @@ from sklearn.metrics import confusion_matrix
 
 from sklearn import cross_validation
 
+from sklearn.preprocessing import OneHotEncoder
+
 import numpy as np
 
 labels = ["Walking", "Walking_upstairs", "Walking_downstairs", "Sitting", "Standing", "Laying"]
@@ -40,6 +42,11 @@ def num_label_changes(y):
     return num_changes
     
 def label_smoothness(y_predict):
+    """
+        Number of label transitions over number of labels.
+        
+        The smaller the smoother it is.
+    """
     n = len(y_predict)
     num_changes_predict = num_label_changes(y_predict)
     return num_changes_predict / float(n)
@@ -115,5 +122,24 @@ def fit_clf_kfold(clf,Xs,ys,flatten=True,n_folds=5):
         result.append((y_gold,y_predict))
     return result
     
+    
+
+def get_last_action_feature(X,ys):
+    """
+    Convert the labels in ys into a one-hot representation.
+    The result will be shifted so that each row represents the last action.
+    The first row everything will be 0.
+    """
+    onehot = OneHotEncoder()
+    onehot.fit([[y] for y in ys])
+    
+    actions = onehot.transform([[y] for y in ys])
+    actions = np.asarray(actions.todense())
+    #the first row is all zeros, because there is no prior action:
+    last_action = np.zeros(actions.shape)
+    last_action[1:,:] = actions[:-1,:]
+
+    return onehot,np.concatenate([X,last_action],axis=1)
+
     
     

@@ -427,8 +427,8 @@ class CRFTrainer():
             method = 'BFGS'
             if self.transition_weighting:
                 method = 'L-BFGS-B'
-            method = 'L-BFGS-B'
-            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True, 'maxiter':100, 'maxfun':100}, callback=self.test_accuracy)
+            method = 'L-BFGS-B'    
+            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True, 'maxiter':250, 'maxfun':500}, callback=self.test_accuracy)
         
             self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
             if not self.transition_weighting:

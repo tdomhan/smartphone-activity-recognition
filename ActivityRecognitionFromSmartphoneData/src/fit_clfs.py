@@ -62,24 +62,6 @@ def get_diff_features(X):
     Xnew[1:,:] = X_diff
     return Xnew
 
-def get_last_action_feature(X,ys):
-    """
-    Convert the labels in ys into a one-hot representation.
-    The result will be shifted so that each row represents the last action.
-    The first row everything will be 0.
-    """
-    onehot = OneHotEncoder()
-    onehot.fit([[y] for y in ys])
-    
-    actions = onehot.transform([[y] for y in ys])
-    actions = np.asarray(actions.todense())
-    #the first row is all zeros, because there is no prior action:
-    last_action = np.zeros(actions.shape)
-    last_action[1:,:] = actions[:-1,:]
-
-    return onehot,np.concatenate([X_train,last_action],axis=1)
-
-
 def predict_with_last_action(clf, X, onehot):
     """
         Predict one at a time and always add last action to 
@@ -95,12 +77,12 @@ def predict_with_last_action(clf, X, onehot):
         
     return y_predict
 
-def run_clfs_on_data(classifiers, X_pers_all, y_pers_all):
+def run_clfs_on_data(classifiers, Xs, ys):
     results = {}
     
     for name, clf in classifiers.iteritems():
         print "running %s" % name
-        clf_results = fit_clf_kfold(clf['clf'], X_pers_all, y_pers_all,flatten=not clf['structured'])
+        clf_results = fit_clf_kfold(clf['clf'], Xs, ys, flatten=not clf['structured'])
         # with feature selection:
         #clf_results = fit_clf_kfold(clf['clf'], [X[:,select_features] for X in X_pers_all], y_pers_all,flatten=not clf['structured'])
         results[name] = clf_results
@@ -121,7 +103,7 @@ if __name__ == '__main__':
     y_all = np.concatenate([y_train, y_test])
     
     
-    features_selected = pickle.load(open('selected_features.pickle'))
+    selected_features = pickle.load(open('selected_features.pickle'))
     
     #SVM-HMM dumping
     #dump_svmlight_file(X_test,y_test,"/Users/tdomhan/Downloads/svm_hmm/activity-data/Xtest.data",zero_based=False,query_id=persons_test)
@@ -155,7 +137,6 @@ if __name__ == '__main__':
     
     classifiers = {
                    "Logistic Regression": {'clf': LogisticRegression(), 'structured': False},
-                   "Logistic Regression (l1 regularized)": {'clf': LogisticRegression(penalty='l1',C=100), 'structured': False},
                    "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured': False},
                    "Gaussian Naive Bayes": {'clf': GaussianNB(), 'structured': False},
                    "SVMHMM": {'clf': SVMHMMCRF(C=1), 'structured': True},
@@ -170,10 +151,21 @@ if __name__ == '__main__':
         clf_results = results[clf_name]
         accuracies = np.array([accuracy_score(gold, predict) for gold, predict in clf_results])
         print "%s accuracy: %f +- %f" % (clf_name, accuracies.mean(), accuracies.std())
+        smoothness_predict = np.array([label_smoothness(predict) for gold, predict in clf_results])
+        print "%s smoothness: %f +- %f" % (clf_name, smoothness_predict.mean(), smoothness_predict.std())
+        smoothness_gold = np.array([label_smoothness(gold) for gold, predict in clf_results])
+        print "smoothess(gold): %f +- %f" % (smoothness_gold.mean(), smoothness_gold.std())
         
         y_all_gold = np.concatenate(zip(*clf_results)[0])
         y_all_predict = np.concatenate(zip(*clf_results)[1])
         
+    
+    crf_classifiers =  {
+                        "CRF": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=10, transition_weighting=False),
+                            'structured': True},
+                        "CRF transition weights": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=10, transition_weighting=True),
+                            'structured': True},
+                        }
     
     crf_classifiers_l2_best = {
                    "CRF (sigma=1)": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=1, transition_weighting=False),
@@ -188,7 +180,7 @@ if __name__ == '__main__':
                             'structured': True},
                    }
     
-    #results_feature_selection = run_clfs_on_data(classifiers, [X[:,features_selected] for X in X_pers_all], y_pers_all)
+    #results_feature_selection = run_clfs_on_data(classifiers, [X[:,selected_features] for X in X_pers_all], y_pers_all)
     
     
     #clf_results = fit_clf_kfold(clf, X_pers_all, y_pers_all,flatten=False)

@@ -11,6 +11,8 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.misc import logsumexp
 
+from sklearn.preprocessing import LabelBinarizer
+
 from utils import flatten_data
 
 from sklearn.base import BaseEstimator
@@ -23,12 +25,12 @@ def trans_weight_function(X):
     
     This function will be used to weight the transition weights.
     """
-    #X_diff = np.square(np.diff(X, n=1, axis=0)) # squared diff
-    #X_diff = np.abs(np.diff(X, n=1, axis=0))    # absolute diff
-    X_diff =  np.diff(X, n=1, axis=0)            # plain diff
+    X_diff = np.square(np.diff(X, n=1, axis=0)) # squared diff
     Xnew = np.zeros(X.shape)
-    Xnew[1:,:] = X_diff
-    return X_diff
+    Xnew[:-1,:] = X_diff
+    return Xnew 
+
+    #return X #no diff
 
 def predict_test_words(test_imgs,test_words,fweights,tweights,transition_weighting=False):
     
@@ -368,6 +370,12 @@ class CRFTrainer():
             #print "DER3: %f" % (time.clock() - tick)
             tick = time.clock()
         
+        #fixing the identity:
+        #for c in range(0,self.n_labels):
+        #    tderivatives[c][c] = 0
+        #print "aaa" 
+        
+        
         derivatives *= 1./float(len(train_imgs))
         
         logprob = logprob / float(len(train_imgs))
@@ -424,11 +432,12 @@ class CRFTrainer():
     def train(self):
         try:
             x0 = np.zeros((self.n_fweights+self.n_tweights,1))
+            
             method = 'BFGS'
             if self.transition_weighting:
                 method = 'L-BFGS-B'
-            method = 'L-BFGS-B'    
-            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True, 'maxiter':250, 'maxfun':500}, callback=self.test_accuracy)
+            method = 'L-BFGS-B'
+            res = minimize(self.crf_log_lik, x0, args = (self.Xs, self.ys_labels), method=method, jac=True, options={'disp': True, 'maxiter':250, 'maxfun':400, 'pgtol':1e-04}, callback=self.test_accuracy)
         
             self.fweights = res.x[0:self.n_fweights].reshape(self.n_labels,self.n_features)
             if not self.transition_weighting:
@@ -490,6 +499,9 @@ class LinearCRF(BaseEstimator):
         self.sigma = sigma
         self.addone = addone
         self.transition_weighting = transition_weighting
+    
+        print "TWEIGHT", transition_weighting
+        print "ADDONE", addone
     
         if regularization == 'l1':
             print "warning: L1 not implemented, sorry!"
@@ -688,7 +700,7 @@ class LinearCRF(BaseEstimator):
         for i, tweights_idx in enumerate(ranked_transitions[:n]):
             if not self.transition_weighting:
                 label_t0_idx,label_t1_idx = np.unravel_index(tweights_idx, self.tweights.shape)
-                print "%d. c(t): %s\t c(t+1): %\t value: %f" % (i, feature_names[feature_idx], label_names[label_idx], self.fweights[fweights_idx])
+                print "%d. c(t): %s\t c(t+1): %s\t value: %f" % (i, label_names[label_t0_idx], label_names[label_t1_idx], self.fweights[(label_t0_idx,label_t1_idx)])
             else:
                 label_t0_idx,label_t1_idx,feature_idx = np.unravel_index(tweights_idx, self.tweights.shape)
                 print "%d. f(x): %s\t c(t): %s\t c(t+1): %s\t value: %f" % (i, feature_names[feature_idx], label_names[label_t0_idx], label_names[label_t1_idx] , self.tweights[(label_t0_idx,label_t1_idx,feature_idx)])
@@ -721,7 +733,7 @@ class LinearCRF(BaseEstimator):
 #            plt.yticks([])
         
         plt.figure(2)
-        plt.imshow(self.tweights,interpolation='nearest',cmap = cm.Greys_r);
+        plt.imshow(self.tweights,interpolation='nearest',cmap = cm.jet);
         #plt.xticks(range(10),labels)
         #plt.yticks(range(10),labels)
         plt.colorbar();
@@ -743,8 +755,7 @@ class LinearCRFEnsemble(BaseEstimator):
         
         #label_names = kwargs['label_names']
         #feature_names = ["%s"] #add CLF - FEATURE feature names
-        
-        self.crf = LinearCRF(kwargs)
+        self.crf = LinearCRF(**kwargs)
         self.classifiers = classifiers
         
         
@@ -840,9 +851,14 @@ class LinearCRFEnsemble(BaseEstimator):
     
     def transform(self, X):
         all_x = []
+        
         for name, clf in self.classifiers.iteritems():
             if hasattr(clf['clf'],'predict_proba'):
-                all_x.append(clf['clf'].predict_proba(X))
+                try:
+                    all_x.append(clf['clf'].predict_proba(X))
+                except:
+                    if hasattr(clf['clf'],'decision_function'):
+                        all_x.append(clf['clf'].decision_function(X))
             elif hasattr(clf['clf'],'decision_function'):
                 all_x.append(clf['clf'].decision_function(X))
             else:

@@ -62,33 +62,30 @@ def get_diff_features(X):
     Xnew[1:,:] = X_diff
     return Xnew
 
-def predict_with_last_action(clf, X, onehot):
-    """
-        Predict one at a time and always add last action to 
-        the next prediction using the onehot encoder.
-    """
-    lasty = np.zeros(6) #TODO: remove harding of 6
-    y_predict = []
-    for x in X:
-        x_last_action = np.concatenate([x,lasty])
-        y = clf.predict([x_last_action])
-        y_predict.append(y[0])
-        lasty = np.array(onehot.transform([y]).todense()).flatten()
-        
-    return y_predict
-
-def run_clfs_on_data(classifiers, Xs, ys):
+def run_clfs_on_data(classifiers, Xs, ys, add_last_action = False):
     results = {}
     
     for name, clf in classifiers.iteritems():
         print "running %s" % name
-        clf_results = fit_clf_kfold(clf['clf'], Xs, ys, flatten=not clf['structured'])
+        clf_results = fit_clf_kfold(clf['clf'], Xs, ys, flatten=not clf['structured'], add_last_action=add_last_action)
         # with feature selection:
         #clf_results = fit_clf_kfold(clf['clf'], [X[:,select_features] for X in X_pers_all], y_pers_all,flatten=not clf['structured'])
         results[name] = clf_results
         
     return results
-    
+
+def plot_most_important_features(clf, label_names, feature_names, n=10, best=True, absolut=True):
+    if absolut:
+        ranked_features = np.argsort(np.abs(clf.coef_), axis=None)
+    else:
+        ranked_features = np.argsort(clf.coef_, axis=None)
+        
+    if best:
+        ranked_features = ranked_features[::-1] #inverse to get the best first
+        
+    for i, fweights_idx in enumerate(ranked_features[:n]):
+            label_idx,feature_idx = np.unravel_index(fweights_idx, clf.coef_.shape)
+            print "%d. f: %s\t\t c: %s\t value: %f" % (i, feature_names[feature_idx], label_names[label_idx], clf.coef_[(label_idx,feature_idx)])
 
 if __name__ == '__main__':
     print "loading data"
@@ -129,27 +126,32 @@ if __name__ == '__main__':
     ensemble_classifiers = {
                                 "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured': False},
                                 "Logistic Regression": {'clf': LogisticRegression(), 'structured': False},
-                                "KNN (weights: uniform, neighbors=5)": {'clf': KNeighborsClassifier(), 'structured': False},
-                                "Decision Tree": {'clf': DecisionTreeClassifier(), 'structured': False},
-                                "RandomForest": {'clf': RandomForestClassifier(), 'structured': False}
+                                "SGDClassifier":{'clf': SGDClassifier(),'structured':False},
                                 }
-    crf_ensemble = LinearCRFEnsemble(ensemble_classifiers, addone=True, regularization=None, lmbd=0.01, sigma=100, transition_weighting=False)
+    
+    crf_ensemble = LinearCRFEnsemble(ensemble_classifiers, addone=True, regularization=None, lmbd=0.01, sigma=100, transition_weighting=True)
     
     classifiers = {
+                   "SGDClassifier":{'clf': SGDClassifier(),'structured':False},
                    "Logistic Regression": {'clf': LogisticRegression(), 'structured': False},
                    "linear Support Vector Classifier": {'clf': LinearSVC(), 'structured': False},
                    "Gaussian Naive Bayes": {'clf': GaussianNB(), 'structured': False},
-                   "SVMHMM": {'clf': SVMHMMCRF(C=1), 'structured': True},
+                   #"SVMHMM": {'clf': SVMHMMCRF(C=1), 'structured': True},
                    "KNN (weights: uniform, neighbors=5)": {'clf': KNeighborsClassifier(), 'structured': False},
                    "Decision Tree": {'clf': DecisionTreeClassifier(), 'structured': False},
                    "RandomForest": {'clf': RandomForestClassifier(), 'structured': False},
+                   "CRF": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=100, transition_weighting=False),
+                            'structured': True},
                    }
     
     results = run_clfs_on_data(classifiers, X_pers_all, y_pers_all)
     
+    results_last_action = run_clfs_on_data(classifiers, X_pers_all, y_pers_all, add_last_action=True)
+    
     for clf_name in results:
         clf_results = results[clf_name]
         accuracies = np.array([accuracy_score(gold, predict) for gold, predict in clf_results])
+        print accuracies
         print "%s accuracy: %f +- %f" % (clf_name, accuracies.mean(), accuracies.std())
         smoothness_predict = np.array([label_smoothness(predict) for gold, predict in clf_results])
         print "%s smoothness: %f +- %f" % (clf_name, smoothness_predict.mean(), smoothness_predict.std())
@@ -159,11 +161,23 @@ if __name__ == '__main__':
         y_all_gold = np.concatenate(zip(*clf_results)[0])
         y_all_predict = np.concatenate(zip(*clf_results)[1])
         
+        print classification_report(y_all_gold, y_all_predict, target_names = labels)
+        print confusion_matrix_report(y_all_gold, y_all_predict, labels)
+        print confusion_matrix(y_all_gold, y_all_predict)
+        
+        
     
     crf_classifiers =  {
-                        "CRF": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=10, transition_weighting=False),
+                        "CRF": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=100, transition_weighting=False),
                             'structured': True},
-                        "CRF transition weights": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=10, transition_weighting=True),
+                        "CRF transition weights": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization="l2", lmbd=0.01, sigma=100, transition_weighting=True),
+                            'structured': True},
+                        }
+    
+    crf_unregularized_classifiers =  {
+                        "CRF": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization=None, lmbd=0.01, sigma=10, transition_weighting=False),
+                            'structured': True},
+                        "CRF transition weights": {'clf': LinearCRF(feature_names=feature_names, label_names=labels, addone=True, regularization=None, lmbd=0.01, sigma=10, transition_weighting=True),
                             'structured': True},
                         }
     
@@ -181,6 +195,7 @@ if __name__ == '__main__':
                    }
     
     #results_feature_selection = run_clfs_on_data(classifiers, [X[:,selected_features] for X in X_pers_all], y_pers_all)
+    #results_feature_selection = run_clfs_on_data(classifiers, [rfecv.transform(X) for X in X_pers_all], y_pers_all)
     
     
     #clf_results = fit_clf_kfold(clf, X_pers_all, y_pers_all,flatten=False)

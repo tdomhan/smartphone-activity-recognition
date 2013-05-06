@@ -88,11 +88,27 @@ def unflatten_per_person(X_all,y_all,persons_all):
 def flatten_data(X,y):
     return np.concatenate(X), np.concatenate(y)
 
-def fit_clf_kfold(clf,Xs,ys,flatten=True,n_folds=5):
+def predict_with_last_action(clf, X, onehot):
+    """
+        Predict one at a time and always add last action to 
+        the next prediction using the onehot encoder.
+    """
+    lasty = np.zeros(6) #TODO: remove harding of 6
+    y_predict = []
+    for x in X:
+        x_last_action = np.concatenate([x,lasty])
+        y = clf.predict([x_last_action])
+        y_predict.append(y[0])
+        lasty = np.array(onehot.transform([y]).todense()).flatten()
+        
+    return y_predict
+
+def fit_clf_kfold(clf,Xs,ys,flatten=True,n_folds=5, add_last_action=False):
     """
     X: an array of X, one for each person
     y: an array of array of labels, one for each person
     flatten: set to True for classifiers that don't take the structure into account.
+    add_last_action: add last action as a feature?
     
     return:
     (y_gold, y_predict) for each fold
@@ -108,10 +124,16 @@ def fit_clf_kfold(clf,Xs,ys,flatten=True,n_folds=5):
         X_test = [Xs[u] for u in test_index]
         y_test = [ys[u] for u in test_index]
         if flatten:
+            print "flattening"
             X_train, y_train = flatten_data(X_train, y_train)
             X_test, y_test = flatten_data(X_test, y_test)
-            clf.fit(X_train,y_train)
-            y_predict = clf.predict(X_test)
+            if not add_last_action:
+                clf.fit(X_train,y_train)
+                y_predict = clf.predict(X_test)
+            else:
+                onehot, X_train_new = get_last_action_feature(X_train,y_train)
+                clf.fit(X_train_new,y_train)
+                y_predict = predict_with_last_action(clf,X_test,onehot)
             y_gold = y_test
         else:
             clf.batch_fit(X_train,y_train)
